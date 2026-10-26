@@ -1,0 +1,74 @@
+# Every push: compile the iPhone app (unsigned) and package the Mac app.
+# A v* tag also publishes a GitHub Release with the .dmg and toolbay.json (what the Toolbay hub installs).
+name: build
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tools
+        run: brew install xcodegen
+
+      - name: Generate the iPhone project
+        run: xcodegen generate --spec ios/project.yml --project ios
+
+      - name: Phone components (idevice)
+        run: scripts/fetch-idevice.sh
+
+      - name: Compile the iPhone app (unsigned, any iPhone)
+        run: |
+          xcodebuild -project ios/GPSSpoofer.xcodeproj -scheme GPSSpoofer -configuration Debug \
+            -destination 'generic/platform=iOS' -derivedDataPath build/ios \
+            CODE_SIGNING_ALLOWED=NO build -quiet
+
+      - name: Version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-${GITHUB_SHA::7}"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Package the Mac app
+        run: scripts/package-mac.sh
+
+      - name: Check the bundled iPhone project
+        run: |
+          test -f "dist/GPS Spoofer.app/Contents/Resources/ios/GPSSpoofer.xcodeproj/project.pbxproj"
+          test ! -e "dist/GPS Spoofer.app/Contents/Resources/ios/Vendor"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gps-spoofer-mac
+          path: dist/*.dmg
+
+      - name: toolbay.json
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          DMG="GPS.Spoofer_${VERSION}_aarch64.dmg"
+          python3 - "$DMG" <<'PY'
+          import hashlib, json, os, sys
+          dmg = sys.argv[1]
+          m = json.load(open("toolbay.json"))
+          m["version"] = os.environ["VERSION"]
+          data = open(f"dist/{dmg}", "rb").read()
+          m["platforms"]["darwin-aarch64"].update(asset=dmg, size=len(data), sha256=hashlib.sha256(data).hexdigest())
+          json.dump(m, open("dist/toolbay.json", "w"), indent=2)
+          PY
+          cat dist/toolbay.json
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "dist/GPS.Spoofer_${VERSION}_aarch64.dmg" dist/toolbay.json \
+            --title "GPS Spoofer $VERSION" --notes "Install it from Toolbay, or open the .dmg and drag GPS Spoofer to Applications."

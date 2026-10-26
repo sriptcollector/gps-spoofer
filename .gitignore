@@ -1,0 +1,7 @@
+.build/
+dist/
+ios/Vendor/
+ios/*.xcodeproj/
+.DS_Store
+*.xcuserstate
+xcuserdata/
