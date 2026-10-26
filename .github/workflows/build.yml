@@ -70,5 +70,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "dist/GPS.Spoofer_${VERSION}_aarch64.dmg" dist/toolbay.json \
+          # plus a version-free copy so toolbay.ai can link /releases/latest/download/GPS.Spoofer_aarch64.dmg
+          cp "dist/GPS.Spoofer_${VERSION}_aarch64.dmg" dist/GPS.Spoofer_aarch64.dmg
+          gh release create "$GITHUB_REF_NAME" "dist/GPS.Spoofer_${VERSION}_aarch64.dmg" dist/GPS.Spoofer_aarch64.dmg dist/toolbay.json \
             --title "GPS Spoofer $VERSION" --notes "Install it from Toolbay, or open the .dmg and drag GPS Spoofer to Applications."
