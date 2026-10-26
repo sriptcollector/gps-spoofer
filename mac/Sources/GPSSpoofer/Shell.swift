@@ -1,67 +1,108 @@
 import Foundation
+import Security
 
-/// Runs command-line tools off the main thread. Every Xcode tool gets DEVELOPER_DIR pointed at the
-/// Xcode we found, so it works even when `xcode-select` still points at the Command Line Tools.
-enum Shell {
+/// Runs gs-helper (mac/helper, bundled in Contents/MacOS) off the main thread. It does everything that
+/// used to need Xcode: talks to the iPhone over USB, signs in to Apple, signs and installs the app.
+/// It prints JSON lines: events while it works, then one final {"ok": …} line.
+enum Helper {
     struct Result {
-        let code: Int32
-        let out: String
-        let err: String
-        var ok: Bool { code == 0 }
-        /// Last meaningful line, for the "Details" disclosure. Never shown as the main message.
-        var tail: String {
-            let all = (err.isEmpty ? out : err).split(separator: "\n").map(String.init)
-            return all.suffix(12).joined(separator: "\n")
+        let ok: Bool
+        let body: [String: Any]
+        var error: String { body["error"] as? String ?? "Something went wrong. Try again." }
+        var details: String { body["details"] as? String ?? "" }
+        var failure: InstallError { InstallError(error, details) }
+    }
+
+    static var path: String {
+        if let p = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("gs-helper").path,
+           FileManager.default.isExecutableFile(atPath: p) { return p }
+        if let dev = ProcessInfo.processInfo.environment["GS_HELPER"] { return dev }
+        return URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("../../helper/target/release/gs-helper").standardized.path
+    }
+
+    /// A running helper: `send` answers its questions (the 2FA code) on stdin.
+    final class Run: @unchecked Sendable {
+        fileprivate let input = Pipe()
+        func send(_ obj: [String: Any]) {
+            guard let data = try? JSONSerialization.data(withJSONObject: obj) else { return }
+            try? input.fileHandleForWriting.write(contentsOf: data + Data("\n".utf8))
         }
     }
 
-    static var developerDir: String?
-
-    static func run(_ exe: String, _ args: [String], cwd: String? = nil) async -> Result {
-        await withCheckedContinuation { cont in
+    /// `input` goes in as the first stdin line (the Apple ID). `onEvent` gets every non-final line on
+    /// the main actor, with the Run so it can reply.
+    static func call(_ args: [String], input: [String: Any]? = nil,
+                     onEvent: @escaping @MainActor ([String: Any], Run) -> Void = { _, _ in }) async -> Result {
+        let run = Run()
+        return await withCheckedContinuation { cont in
             DispatchQueue.global().async {
                 let p = Process()
-                p.executableURL = URL(fileURLWithPath: exe)
+                p.executableURL = URL(fileURLWithPath: path)
                 p.arguments = args
-                if let cwd { p.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-                var env = ProcessInfo.processInfo.environment
-                if let d = developerDir { env["DEVELOPER_DIR"] = d }
-                p.environment = env
-                let o = Pipe(), e = Pipe()
-                p.standardOutput = o; p.standardError = e
-                // Drain both pipes concurrently so a chatty xcodebuild can't fill one and stall.
-                var outData = Data(), errData = Data()
+                let out = Pipe(), err = Pipe()
+                p.standardOutput = out; p.standardError = err; p.standardInput = run.input
+                var errData = Data()
                 let g = DispatchGroup()
-                g.enter(); DispatchQueue.global().async { outData = o.fileHandleForReading.readDataToEndOfFile(); g.leave() }
-                g.enter(); DispatchQueue.global().async { errData = e.fileHandleForReading.readDataToEndOfFile(); g.leave() }
+                g.enter(); DispatchQueue.global().async { errData = err.fileHandleForReading.readDataToEndOfFile(); g.leave() }
                 do { try p.run() } catch {
-                    cont.resume(returning: Result(code: -1, out: "", err: "\(exe): \(error.localizedDescription)"))
+                    cont.resume(returning: Result(ok: false, body: ["error": "GPS Spoofer is missing a part. Reinstall it.",
+                                                                    "details": "\(path): \(error.localizedDescription)"]))
                     return
+                }
+                if let input { run.send(input) }
+
+                var final: [String: Any]?
+                var buffer = Data()
+                let reader = out.fileHandleForReading
+                while true {
+                    let chunk = reader.availableData
+                    if chunk.isEmpty { break }
+                    buffer += chunk
+                    while let nl = buffer.firstIndex(of: 0x0A) {
+                        let line = buffer[buffer.startIndex..<nl]
+                        buffer = Data(buffer[buffer.index(after: nl)...])
+                        guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+                        if obj["ok"] != nil { final = obj } else { DispatchQueue.main.async { onEvent(obj, run) } }
+                    }
                 }
                 p.waitUntilExit()
                 g.wait()
-                cont.resume(returning: Result(code: p.terminationStatus,
-                                              out: String(decoding: outData, as: UTF8.self),
-                                              err: String(decoding: errData, as: UTF8.self)))
+                try? run.input.fileHandleForWriting.close()
+                if let final {
+                    cont.resume(returning: Result(ok: final["ok"] as? Bool ?? false, body: final))
+                } else {
+                    let tail = String(decoding: errData, as: UTF8.self).split(separator: "\n").suffix(12).joined(separator: "\n")
+                    cont.resume(returning: Result(ok: false, body: ["error": "Something went wrong. Try again.",
+                                                                    "details": "exit \(p.terminationStatus)\n\(tail)"]))
+                }
             }
         }
     }
+}
 
-    static func xcrun(_ args: [String]) async -> Result { await run("/usr/bin/xcrun", args) }
+/// The Apple ID password lives in the login keychain, never on disk.
+enum Keychain {
+    private static let service = "GPS Spoofer Apple ID"
 
-    /// `xcrun devicectl … --json-output` → the parsed `result` object.
-    static func devicectl(_ args: [String]) async -> (Result, [String: Any]?) {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("gs-\(UUID().uuidString).json")
-        defer { try? FileManager.default.removeItem(at: tmp) }
-        let r = await xcrun(["devicectl"] + args + ["--quiet", "--json-output", tmp.path])
-        guard let data = try? Data(contentsOf: tmp),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return (r, nil) }
-        return (r, obj["result"] as? [String: Any])
+    static func password(for email: String) -> String? {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                kSecAttrAccount as String: email, kSecReturnData as String: true]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess, let d = item as? Data else { return nil }
+        return String(data: d, encoding: .utf8)
     }
 
-    /// Runs a shell line with an administrator password prompt (macOS's own dialog).
-    static func asAdmin(_ line: String) async -> Result {
-        let escaped = line.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-        return await run("/usr/bin/osascript", ["-e", "do shell script \"\(escaped)\" with administrator privileges"])
+    static func save(_ password: String, for email: String) {
+        delete(email)
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                kSecAttrAccount as String: email, kSecValueData as String: Data(password.utf8)]
+        SecItemAdd(q as CFDictionary, nil)
+    }
+
+    static func delete(_ email: String) {
+        let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+                                kSecAttrAccount as String: email]
+        SecItemDelete(q as CFDictionary)
     }
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Puts the iOS-only IDevice.xcframework (module renamed to IDeviceFFI) in ios/Vendor for local/CI
-# builds. The Mac app does the same thing itself at install time (mac/Sources/GPSSpoofer/Installer.swift).
+# builds (scripts/build-ipa.sh calls it).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VER=v0.1.68

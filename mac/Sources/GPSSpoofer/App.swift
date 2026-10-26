@@ -64,21 +64,23 @@ struct MainView: View {
             header
 
             section("Before installing") {
-                row(checks.xcode) {
-                    switch checks.xcodeState {
-                    case .missing: button("Get Xcode") { NSWorkspace.shared.open(URL(string: "macappstore://apps.apple.com/app/id497799835")!) }
-                    case .needsSetup: button("Finish setup", busy: "xcode") { await checks.finishXcodeSetup() }
-                    case .ready: EmptyView()
-                    }
-                }
                 row(checks.account) {
-                    if checks.account.state == .bad, checks.xcodeState == .ready {
-                        button("Open Xcode") { checks.openXcodeAccounts() }
-                    } else if checks.teams.count > 1 {
-                        Picker("", selection: $checks.selectedTeam) {
-                            ForEach(checks.teams) { Text($0.name).tag($0.id) }
+                    if checks.account.state == .bad {
+                        button("Sign in") { checks.showSignIn = true }
+                    } else {
+                        HStack(spacing: 6) {
+                            if checks.teams.count > 1 {
+                                Picker("", selection: $checks.selectedTeam) {
+                                    ForEach(checks.teams) { Text($0.name).tag($0.id) }
+                                }
+                                .labelsHidden().frame(width: 110)
+                            }
+                            Menu {
+                                Button("Sign in with another Apple ID") { checks.showSignIn = true }
+                                Button("Sign out") { checks.signOut() }
+                            } label: { Image(systemName: "ellipsis.circle") }
+                                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                         }
-                        .labelsHidden().frame(width: 130)
                     }
                 }
                 row(checks.connected) { EmptyView() }
@@ -106,6 +108,7 @@ struct MainView: View {
         .padding(20)
         .background(Palette.canvas)
         .onAppear { if !CommandLine.arguments.contains("--snapshot") { checks.start() } }
+        .sheet(isPresented: $checks.showSignIn) { SignInView(checks: checks).preferredColorScheme(.dark) }
     }
 
     private var header: some View {
@@ -210,6 +213,71 @@ struct MainView: View {
         .buttonStyle(.plain)
         .disabled(busy != nil && checks.busy == busy)
     }
+}
+
+/// Apple ID sign-in, and the two-factor code when Apple asks for one (during sign-in or install).
+struct SignInView: View {
+    @ObservedObject var checks: Checks
+    @StateObject private var form = SignInForm()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if let prompt = checks.codePrompt {
+                Text("Enter the code").font(.system(size: 17, weight: .bold))
+                Text(prompt.sms ? "Apple texted a 6-digit code to your phone number."
+                                : "Apple sent a 6-digit code to your other Apple devices. Tap Allow there to see it.")
+                    .font(.system(size: 12)).foregroundStyle(Palette.dim).fixedSize(horizontal: false, vertical: true)
+                if prompt.lastError != nil {
+                    Text("That code didn't work. Try again.").font(.system(size: 12)).foregroundStyle(Palette.bad)
+                }
+                TextField("123456", text: $form.code).textFieldStyle(.roundedBorder).font(.system(size: 18, design: .monospaced))
+                    .onSubmit(submit)
+                HStack {
+                    Button("Cancel") { checks.cancelSignIn() }
+                    Spacer()
+                    Button("Continue", action: submit).keyboardShortcut(.defaultAction)
+                        .disabled(form.code.filter(\.isNumber).count < 6)
+                }
+            } else {
+                Text("Sign in with your Apple ID").font(.system(size: 17, weight: .bold))
+                Text("GPS Spoofer uses it to sign the app for your iPhone, the same way Xcode would. A free Apple ID works; the app then lasts 7 days before you press Install again. Your password stays in this Mac's keychain and only goes to Apple.")
+                    .font(.system(size: 12)).foregroundStyle(Palette.dim).fixedSize(horizontal: false, vertical: true)
+                TextField("Apple ID (email)", text: $form.email).textFieldStyle(.roundedBorder).textContentType(.username)
+                SecureField("Password", text: $form.password).textFieldStyle(.roundedBorder).textContentType(.password)
+                    .onSubmit(signIn)
+                if let e = checks.signInError {
+                    Text(e.message).font(.system(size: 12)).foregroundStyle(Palette.bad).fixedSize(horizontal: false, vertical: true)
+                }
+                HStack {
+                    Button("Cancel") { checks.cancelSignIn() }
+                    Spacer()
+                    if checks.signingIn { ProgressView().controlSize(.small) }
+                    Button("Sign in", action: signIn).keyboardShortcut(.defaultAction)
+                        .disabled(checks.signingIn || !form.email.contains("@") || form.password.isEmpty)
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 360)
+        .onAppear { if form.email.isEmpty { form.email = checks.email } }
+    }
+
+    private func submit() {
+        guard form.code.filter(\.isNumber).count >= 6 else { return }
+        checks.submitCode(form.code)
+        form.code = ""
+    }
+
+    private func signIn() {
+        guard !checks.signingIn, form.email.contains("@"), !form.password.isEmpty else { return }
+        Task { await checks.signIn(email: form.email, password: form.password) }
+    }
+}
+
+final class SignInForm: ObservableObject {
+    @Published var email = ""
+    @Published var password = ""
+    @Published var code = ""
 }
 
 /// QR code so the iPhone camera can open the LocalDevVPN App Store page.

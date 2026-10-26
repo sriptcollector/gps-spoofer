@@ -1,4 +1,5 @@
-# Every push: compile the iPhone app (unsigned) and package the Mac app.
+# Every push: compile the iPhone app (unsigned .ipa) and gs-helper, and package the Mac app. Users
+# need no Xcode: the Mac app signs the .ipa with their Apple ID at install time.
 # A v* tag also publishes a GitHub Release with the .dmg and toolbay.json (what the Toolbay hub installs).
 name: build
 on:
@@ -20,17 +21,11 @@ jobs:
       - name: Tools
         run: brew install xcodegen
 
-      - name: Generate the iPhone project
-        run: xcodegen generate --spec ios/project.yml --project ios
+      - name: Rust
+        run: rustup target add aarch64-apple-darwin
 
-      - name: Phone components (idevice)
-        run: scripts/fetch-idevice.sh
-
-      - name: Compile the iPhone app (unsigned, any iPhone)
-        run: |
-          xcodebuild -project ios/GPSSpoofer.xcodeproj -scheme GPSSpoofer -configuration Debug \
-            -destination 'generic/platform=iOS' -derivedDataPath build/ios \
-            CODE_SIGNING_ALLOWED=NO build -quiet
+      - name: Compile the iPhone app (unsigned .ipa, any iPhone)
+        run: scripts/build-ipa.sh
 
       - name: Version
         run: |
@@ -40,10 +35,12 @@ jobs:
       - name: Package the Mac app
         run: scripts/package-mac.sh
 
-      - name: Check the bundled iPhone project
+      - name: Check the bundle
         run: |
-          test -f "dist/GPS Spoofer.app/Contents/Resources/ios/GPSSpoofer.xcodeproj/project.pbxproj"
-          test ! -e "dist/GPS Spoofer.app/Contents/Resources/ios/Vendor"
+          test -f "dist/GPS Spoofer.app/Contents/Resources/GPSSpoofer.ipa"
+          test -x "dist/GPS Spoofer.app/Contents/MacOS/gs-helper"
+          unzip -l "dist/GPS Spoofer.app/Contents/Resources/GPSSpoofer.ipa" | grep -q "Payload/GPSSpoofer.app/GPSSpoofer$"
+          { "dist/GPS Spoofer.app/Contents/MacOS/gs-helper" version || true; } | grep -q Unknown   # it runs (CI has no usbmuxd)
 
       - uses: actions/upload-artifact@v4
         with:

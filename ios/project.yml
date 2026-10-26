@@ -1,6 +1,6 @@
-# xcodegen spec for the iPhone app. CI generates GPSSpoofer.xcodeproj from this and ships it
-# inside the Mac app, which builds it on the user's Mac with their own Apple team.
-# Vendor/IDevice.xcframework is fetched by the Mac app (or scripts/fetch-idevice.sh), not committed.
+# xcodegen spec for the iPhone app. scripts/build-ipa.sh (CI) compiles it unsigned into GPSSpoofer.ipa,
+# which ships inside the Mac app; the Mac app signs it with the user's Apple ID when installing.
+# Vendor/IDevice.xcframework comes from scripts/fetch-idevice.sh, not committed.
 name: GPSSpoofer
 options:
   bundleIdPrefix: ai.toolbay

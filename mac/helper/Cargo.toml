@@ -1,0 +1,24 @@
+[package]
+name = "gs-helper"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "GPS Spoofer's phone helper: Apple ID signing + install (isideload) and device status/pairing (idevice), no Xcode"
+
+[[bin]]
+name = "gs-helper"
+path = "src/main.rs"
+
+[dependencies]
+idevice = { version = "0.1.68", default-features = false, features = ["ring", "usbmuxd", "house_arrest", "afc", "installation_proxy", "amfi", "remote_pairing", "pair"] }
+isideload = { version = "0.5.0", default-features = false, features = ["install", "fs-storage", "tokio-mt"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+plist = "1.8"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+rootcause = "0.12"
+
+[profile.release]
+strip = true
+lto = "thin"

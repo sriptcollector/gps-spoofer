@@ -3,7 +3,7 @@
   "id": "gps-spoofer",
   "name": "GPS Spoofer",
   "tagline": "Move your iPhone's location anywhere. A custom phone app you install from your Mac.",
-  "description": "A small Mac window checks everything your iPhone needs (Xcode, your Apple account, Trust, Developer Mode), then one button builds GPS Spoofer with your own Apple account and puts it on your phone. On the iPhone, tap anywhere on the map to teleport, or plan a walk, drive or boat trip. No jailbreak, and after setup the phone needs no Mac.",
+  "description": "A small Mac window checks everything your iPhone needs (your Apple ID, Trust, Developer Mode), then one button signs GPS Spoofer with your own Apple ID and puts it on your phone. No Xcode needed. On the iPhone, tap anywhere on the map to teleport, or plan a walk, drive or boat trip. No jailbreak, and after setup the phone needs no Mac.",
   "version": "0.0.0",
   "repo": "sriptcollector/gps-spoofer",
   "identifier": "ai.toolbay.gpsspoofer.mac",

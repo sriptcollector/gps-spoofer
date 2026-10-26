@@ -1,20 +1,24 @@
 #!/usr/bin/env bash
 # Builds "GPS Spoofer.app" and GPS.Spoofer_<version>_aarch64.dmg into dist/.
-# The iPhone project ships inside the app (Resources/ios); generate it first with
-# `xcodegen generate --spec ios/project.yml --project ios` (CI does).
+# The app carries the iPhone app prebuilt and unsigned (Resources/GPSSpoofer.ipa, made by
+# scripts/build-ipa.sh; CI does) plus gs-helper, which signs it with the user's Apple ID. No Xcode
+# needed on the user's Mac.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION="${VERSION:-0.0.0-dev}"
 APP="dist/GPS Spoofer.app"
 
-[ -d ios/GPSSpoofer.xcodeproj ] || echo "warning: ios/GPSSpoofer.xcodeproj missing; the app won't be able to install until it's generated" >&2
+IPA=build/GPSSpoofer.ipa
+[ -f "$IPA" ] || echo "warning: $IPA missing (run scripts/build-ipa.sh); the app won't be able to install" >&2
 
 BIN="$(cd mac && swift build -c release --arch arm64 --show-bin-path)"
 (cd mac && swift build -c release --arch arm64)
+(cd mac/helper && cargo build --release --target aarch64-apple-darwin)
 rm -rf dist && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN/GPSSpoofer" "$APP/Contents/MacOS/GPSSpoofer"
+cp mac/helper/target/aarch64-apple-darwin/release/gs-helper "$APP/Contents/MacOS/gs-helper"
 cp mac/Resources/AppIcon.icns "$APP/Contents/Resources/"
-rsync -a --exclude Vendor --exclude '*.xcuserstate' --exclude xcuserdata ios/ "$APP/Contents/Resources/ios/"
+[ -f "$IPA" ] && cp "$IPA" "$APP/Contents/Resources/GPSSpoofer.ipa"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

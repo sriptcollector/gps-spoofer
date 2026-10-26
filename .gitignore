@@ -5,3 +5,5 @@ ios/*.xcodeproj/
 .DS_Store
 *.xcuserstate
 xcuserdata/
+build/
+mac/helper/target/
